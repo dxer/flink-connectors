@@ -41,7 +41,6 @@ public class PhoenixDynamicTableFactory implements DynamicTableSourceFactory, Dy
             .noDefaultValue()
             .withDescription("The name of Phoenix table to connect.");
 
-
     @Override
     public DynamicTableSink createDynamicTableSink(Context context) {
         TableFactoryHelper helper = createTableFactoryHelper(this, context);
