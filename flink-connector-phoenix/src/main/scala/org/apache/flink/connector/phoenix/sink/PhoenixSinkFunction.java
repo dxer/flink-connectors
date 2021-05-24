@@ -60,7 +60,10 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
         LOG.info("start open ...");
         super.open(parameters);
         upsertSQL = buildUpsetSQL(phoenixOptions, fieldNames);
+        LOG.info("Upsert SQL: {}", upsertSQL);
+
         delSQL = buildDelSQL(phoenixOptions, fieldNames, keyIndices);
+        LOG.info("Delete SQL: {}", delSQL);
 
         try {
             establishConnectionAndStatement();
@@ -220,12 +223,8 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
         Class.forName(Constans.PHOENIX_DRIVER); // 加载驱动
         dbConn = DriverManager.getConnection(String.format(Constans.PHOENIX_JDBC_URL_TEMPLATE, phoenixOptions.getServerUrl()));
         dbConn.setAutoCommit(true);
-        String upsetSQL = buildUpsetSQL(phoenixOptions, fieldNames);
-        LOG.info("Upsert SQL: {}", upsetSQL);
-        upsertPstmt = dbConn.prepareStatement(upsetSQL);
 
-        String delSQL = buildDelSQL(phoenixOptions, fieldNames, keyIndices);
-        LOG.info("Delete SQL: {}", delSQL);
+        upsertPstmt = dbConn.prepareStatement(upsertSQL);
         delPstmt = dbConn.prepareStatement(delSQL);
     }
 
