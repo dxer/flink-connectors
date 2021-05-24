@@ -73,7 +73,13 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
         LOG.info("end open.");
     }
 
-
+    /**
+     * 生成 upsert sql
+     *
+     * @param options
+     * @param fieldNames
+     * @return
+     */
     private String buildUpsetSQL(PhoenixOptions options, String[] fieldNames) {
         StringBuilder filedBuffer = new StringBuilder();
         StringBuilder valueBuffer = new StringBuilder();
@@ -95,13 +101,21 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
                 .append(options.getTableName())
                 .append(" (")
                 .append(filedBuffer.toString())
-                .append(") values (")
+                .append(") VALUES (")
                 .append(valueBuffer.toString())
                 .append(")");
 
         return builder.toString();
     }
 
+    /**
+     * 生成delete sql
+     *
+     * @param options
+     * @param fieldNames
+     * @param keyIndices
+     * @return
+     */
     private String buildDelSQL(PhoenixOptions options, String[] fieldNames, int[] keyIndices) {
         StringBuilder builder = new StringBuilder();
 
@@ -123,23 +137,23 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
             PreparedStatement pstmt = null;
             try {
                 if (RowKind.INSERT == rowKind || RowKind.UPDATE_BEFORE == rowKind || RowKind.UPDATE_AFTER == rowKind) {
-                    pstmt = setPstmtParams(value, upsertPstmt, false);
+                    pstmt = setPstmtParams(value, upsertPstmt, false); // 填充数据
                 } else if (RowKind.DELETE == rowKind) {
-                    pstmt = setPstmtParams(value, delPstmt, true);
+                    pstmt = setPstmtParams(value, delPstmt, true); // 填充数据
                 }
                 if (pstmt != null) pstmt.executeUpdate();
                 break;
-            } catch (SQLException e) {
-                LOG.error(String.format("JDBC executeBatch error, retry times = %d", retry), e);
+            } catch (Exception e) {
+                LOG.error(String.format("JDBC execute error, retry times = %d", retry), e);
+                LOG.info("Pstmt: {}", pstmt);
                 if (retry >= maxRetryTimes) {
                     throw new RuntimeException("Execution of JDBC statement failed.", e);
                 }
 
                 try {
                     if (!dbConn.isValid(CONNECTION_CHECK_TIMEOUT_SECONDS)) {
-                        upsertPstmt.close();
-                        delPstmt.close();
-                        dbConn.close();
+                        LOG.error("JDBC Connection is Invalid, it will rebuild it.");
+                        close(); // 关闭流
                         establishConnectionAndStatement();
                     }
                 } catch (SQLException | ClassNotFoundException exception) {
@@ -186,14 +200,18 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
     }
 
     /**
+     * 设置 PreparedStatement 参数
+     *
      * @param value
      * @throws SQLException
      */
-    private PreparedStatement setPstmtParams(RowData value, PreparedStatement pstmt, boolean KeyFilter) throws SQLException {
-        pstmt.clearParameters();
-        List<Object> values = getValues(value, KeyFilter);
-        for (int i = 0; i < values.size(); i++) {
-            pstmt.setObject(i + 1, values.get(i));
+    private PreparedStatement setPstmtParams(RowData value, PreparedStatement pstmt, boolean KeyFilter) throws Exception {
+        if (pstmt != null) {
+            pstmt.clearParameters();
+            List<Object> values = getValues(value, KeyFilter);
+            for (int i = 0; i < values.size(); i++) {
+                pstmt.setObject(i + 1, values.get(i));
+            }
         }
         return pstmt;
     }
