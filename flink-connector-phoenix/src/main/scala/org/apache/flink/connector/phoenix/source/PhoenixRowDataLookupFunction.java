@@ -26,6 +26,9 @@ import java.util.List;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
+/**
+ *
+ */
 public class PhoenixRowDataLookupFunction extends TableFunction<RowData> {
 
     private static final Logger LOG = LoggerFactory.getLogger(PhoenixRowDataLookupFunction.class);

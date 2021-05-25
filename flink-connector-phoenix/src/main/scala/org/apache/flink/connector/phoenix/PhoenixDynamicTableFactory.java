@@ -29,7 +29,7 @@ import static org.apache.flink.table.factories.FactoryUtil.createTableFactoryHel
  */
 public class PhoenixDynamicTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
-    private static final String IDENTIFIER = "Phoenix5";
+    private static final String IDENTIFIER = "PHOENIX5";
 
     private static final ConfigOption<String> TABLE_NAME = ConfigOptions
             .key("table-name")
