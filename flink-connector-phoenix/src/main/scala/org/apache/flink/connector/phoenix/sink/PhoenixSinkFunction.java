@@ -1,8 +1,12 @@
 package org.apache.flink.connector.phoenix.sink;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.phoenix.Constans;
+import org.apache.flink.connector.phoenix.DataSource;
 import org.apache.flink.connector.phoenix.PhoenixOptions;
+import org.apache.flink.shaded.guava18.com.google.common.base.Strings;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.RowData;
@@ -38,14 +42,12 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
 
     private int[] keyIndices;
 
-
     private int maxRetryTimes = 3;
+
+    private HikariDataSource hikariDataSource;
 
     private String upsertSQL = null;
     private String delSQL = null;
-    private Connection dbConn;
-    private PreparedStatement upsertPstmt;
-    private PreparedStatement delPstmt;
 
 
     public PhoenixSinkFunction(PhoenixOptions phoenixOptions, String[] fieldNames, DataType[] fieldDataTypes, int[] keyIndices) {
@@ -59,20 +61,16 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
     public void open(Configuration parameters) throws Exception {
         LOG.info("start open ...");
         super.open(parameters);
+        String dbUrl = String.format(Constans.PHOENIX_JDBC_URL_TEMPLATE, phoenixOptions.getServerUrl());
+        LOG.info("Phoenix JDBC URL: {}", dbUrl);
+
         upsertSQL = buildUpsetSQL(phoenixOptions, fieldNames);
         LOG.info("Upsert SQL: {}", upsertSQL);
 
         delSQL = buildDelSQL(phoenixOptions, fieldNames, keyIndices);
         LOG.info("Delete SQL: {}", delSQL);
 
-        try {
-            establishConnectionAndStatement();
-        } catch (SQLException sqe) {
-            throw new IllegalArgumentException("open() failed.", sqe);
-        } catch (ClassNotFoundException cnfe) {
-            throw new IllegalArgumentException("JDBC driver class not found.", cnfe);
-        }
-
+        hikariDataSource = DataSource.newHikariDataSource(dbUrl, null, null);
         LOG.info("end open.");
     }
 
@@ -137,31 +135,22 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
     public void invoke(RowData value, Context context) throws Exception {
         RowKind rowKind = value.getRowKind();
         for (int retry = 1; retry <= maxRetryTimes; retry++) {
+            Connection connection = hikariDataSource.getConnection();
             PreparedStatement pstmt = null;
             try {
                 if (RowKind.INSERT == rowKind || RowKind.UPDATE_BEFORE == rowKind || RowKind.UPDATE_AFTER == rowKind) {
-                    pstmt = setPstmtParams(value, upsertPstmt, false); // 填充数据
+                    pstmt = connection.prepareStatement(upsertSQL);
+                    setPstmtParams(value, pstmt, false); // 填充数据
                 } else if (RowKind.DELETE == rowKind) {
-                    pstmt = setPstmtParams(value, delPstmt, true); // 填充数据
+                    pstmt = connection.prepareStatement(delSQL);
+                    setPstmtParams(value, pstmt, true); // 填充数据
                 }
                 if (pstmt != null) pstmt.executeUpdate();
                 break;
             } catch (Exception e) {
                 LOG.error(String.format("JDBC execute error, retry times = %d", retry), e);
-                LOG.info("Pstmt: {}", pstmt);
                 if (retry >= maxRetryTimes) {
                     throw new RuntimeException("Execution of JDBC statement failed.", e);
-                }
-
-                try {
-                    if (!dbConn.isValid(CONNECTION_CHECK_TIMEOUT_SECONDS)) {
-                        LOG.error("JDBC Connection is Invalid, it will rebuild it.");
-                        close(); // 关闭流
-                        establishConnectionAndStatement();
-                    }
-                } catch (SQLException | ClassNotFoundException exception) {
-                    LOG.error("JDBC connection is not valid, and reestablish connection failed", exception);
-                    throw new RuntimeException("Reestablish JDBC connection failed", exception);
                 }
 
                 try {
@@ -169,6 +158,9 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
                 } catch (InterruptedException e1) {
                     throw new RuntimeException(e1);
                 }
+            } finally {
+                if (pstmt != null) pstmt.close();
+                if (connection != null) connection.close();
             }
         }
     }
@@ -208,7 +200,7 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
      * @param value
      * @throws SQLException
      */
-    private PreparedStatement setPstmtParams(RowData value, PreparedStatement pstmt, boolean KeyFilter) throws Exception {
+    private void setPstmtParams(RowData value, PreparedStatement pstmt, boolean KeyFilter) throws Exception {
         if (pstmt != null) {
             pstmt.clearParameters();
             List<Object> values = getValues(value, KeyFilter);
@@ -216,48 +208,13 @@ public class PhoenixSinkFunction extends RichSinkFunction<RowData> {
                 pstmt.setObject(i + 1, values.get(i));
             }
         }
-        return pstmt;
-    }
-
-    private void establishConnectionAndStatement() throws SQLException, ClassNotFoundException {
-        Class.forName(Constans.PHOENIX_DRIVER); // 加载驱动
-        dbConn = DriverManager.getConnection(String.format(Constans.PHOENIX_JDBC_URL_TEMPLATE, phoenixOptions.getServerUrl()));
-        dbConn.setAutoCommit(true);
-
-        upsertPstmt = dbConn.prepareStatement(upsertSQL);
-        delPstmt = dbConn.prepareStatement(delSQL);
     }
 
 
     @Override
     public void close() {
-        LOG.info("start close ...");
-        if (upsertPstmt != null) {
-            try {
-                upsertPstmt.close();
-            } catch (Exception e) {
-                LOG.warn("Exception occurs while closing PreparedStatement.", e);
-            }
-            this.upsertPstmt = null;
+        if (hikariDataSource != null) {
+            hikariDataSource.close();
         }
-
-        if (delPstmt != null) {
-            try {
-                delPstmt.close();
-            } catch (Exception e) {
-                LOG.warn("Exception occurs while closing PreparedStatement.", e);
-            }
-            this.delPstmt = null;
-        }
-
-        if (dbConn != null) {
-            try {
-                dbConn.close();
-            } catch (Exception e) {
-                LOG.warn("Exception occurs while closing Phoenix Connection.", e);
-            }
-            this.dbConn = null;
-        }
-        LOG.info("end close.");
     }
 }

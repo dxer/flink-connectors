@@ -3,6 +3,7 @@ package org.apache.flink.connector.phoenix;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.connector.jdbc.internal.options.JdbcLookupOptions;
 import org.apache.flink.connector.jdbc.internal.options.JdbcOptions;
 import org.apache.flink.connector.jdbc.table.JdbcDynamicTableFactory;
 import org.apache.flink.connector.phoenix.sink.PhoenixDynamicTableSink;
@@ -17,6 +18,7 @@ import org.apache.flink.table.factories.FactoryUtil.TableFactoryHelper;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.utils.TableSchemaUtils;
 
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -40,6 +42,25 @@ public class PhoenixDynamicTableFactory implements DynamicTableSourceFactory, Dy
             .stringType()
             .noDefaultValue()
             .withDescription("The name of Phoenix table to connect.");
+
+    // look up config options
+    private static final ConfigOption<Long> LOOKUP_CACHE_MAX_ROWS = ConfigOptions
+            .key("lookup.cache.max-rows")
+            .longType()
+            .defaultValue(-1L)
+            .withDescription("the max number of rows of lookup cache, over this value, the oldest rows will " +
+                    "be eliminated. \"cache.max-rows\" and \"cache.ttl\" options must all be specified if any of them is " +
+                    "specified. Cache is not enabled as default.");
+    private static final ConfigOption<Duration> LOOKUP_CACHE_TTL = ConfigOptions
+            .key("lookup.cache.ttl")
+            .durationType()
+            .defaultValue(Duration.ofSeconds(10))
+            .withDescription("the cache time to live.");
+    private static final ConfigOption<Integer> LOOKUP_MAX_RETRIES = ConfigOptions
+            .key("lookup.max-retries")
+            .intType()
+            .defaultValue(3)
+            .withDescription("the max retry times if lookup database failed.");
 
     @Override
     public DynamicTableSink createDynamicTableSink(Context context) {
@@ -65,9 +86,9 @@ public class PhoenixDynamicTableFactory implements DynamicTableSourceFactory, Dy
 
         final ReadableConfig config = helper.getOptions();
         JdbcOptions jdbcOptions = getJdbcOptions(config);
-        TableSchema schema = TableSchemaUtils.getPhysicalSchema(context.getCatalogTable().getSchema());
-
-        return new PhoenixDynamicTableSource(jdbcOptions, schema);
+        TableSchema physicalSchema = TableSchemaUtils.getPhysicalSchema(context.getCatalogTable().getSchema());
+        JdbcLookupOptions lookupOptions = getJdbcLookupOptions(helper.getOptions());
+        return new PhoenixDynamicTableSource(jdbcOptions, lookupOptions, physicalSchema);
     }
 
     @Override
@@ -86,8 +107,9 @@ public class PhoenixDynamicTableFactory implements DynamicTableSourceFactory, Dy
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
         Set<ConfigOption<?>> set = new HashSet<>();
-        set.add(TABLE_NAME);
-        set.add(SERVER_URL);
+        set.add(LOOKUP_CACHE_MAX_ROWS);
+        set.add(LOOKUP_CACHE_TTL);
+        set.add(LOOKUP_MAX_RETRIES);
         return set;
     }
 
@@ -96,7 +118,7 @@ public class PhoenixDynamicTableFactory implements DynamicTableSourceFactory, Dy
 
         final JdbcOptions.Builder builder = JdbcOptions.builder()
                 .setDriverName(Constans.PHOENIX_DRIVER)
-                .setDBUrl(String.format(Constans.PHOENIX_JDBC_URL_TEMPLATE, serverUrl))
+                .setDBUrl(String.format(Constans.PHOENIX_JDBC_URL_TEMPLATE, serverUrl)) // 组装成 phoenix jdbc thin url
                 .setTableName(readableConfig.get(TABLE_NAME))
                 .setDialect(new PhoenixDialect());
 
@@ -104,6 +126,12 @@ public class PhoenixDynamicTableFactory implements DynamicTableSourceFactory, Dy
         readableConfig.getOptional(JdbcDynamicTableFactory.PASSWORD).ifPresent(builder::setPassword);
 
         return builder.build();
+    }
 
+    private JdbcLookupOptions getJdbcLookupOptions(ReadableConfig readableConfig) {
+        return new JdbcLookupOptions(
+                readableConfig.get(LOOKUP_CACHE_MAX_ROWS),
+                readableConfig.get(LOOKUP_CACHE_TTL).toMillis(),
+                readableConfig.get(LOOKUP_MAX_RETRIES));
     }
 }

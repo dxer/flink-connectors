@@ -7,6 +7,9 @@ import org.apache.flink.table.types.logical.RowType;
 
 import java.util.Optional;
 
+/**
+ * PhoenixDialect
+ */
 public class PhoenixDialect implements JdbcDialect {
 
     @Override
@@ -27,5 +30,10 @@ public class PhoenixDialect implements JdbcDialect {
     @Override
     public JdbcRowConverter getRowConverter(RowType rowType) {
         return new PhoenixRowConverter(rowType);
+    }
+
+    @Override
+    public String quoteIdentifier(String identifier) {
+        return identifier;
     }
 }
